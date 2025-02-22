@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Edit2, Trash2, Filter, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Edit2, Trash2, Filter, ArrowUpDown, ChevronLeft, ChevronRight, Check, Bell } from 'lucide-react';
 import { useSalesStore } from '../store/sales';
 import { Database } from '../lib/database.types';
 import DeleteConfirmDialog from '../components/DeleteConfirmDialog';
@@ -21,7 +21,11 @@ type SortOrder = 'asc' | 'desc';
 const ITEMS_PER_PAGE = 10;
 
 export default function Sales() {
-	const { sales, loadSales, deleteSale, updateSale } = useSalesStore();
+	const { sales, loadSales, deleteSale, updateSale, isOnline, reminders, addReminder, completeReminder } =
+		useSalesStore();
+	const [reminderNote, setReminderNote] = useState('');
+	const [showReminderDialog, setShowReminderDialog] = useState(false);
+	const [selectedSale, setSelectedSale] = useState<SaleWithItems | null>(null);
 	const [searchTerm, setSearchTerm] = useState('');
 	const [showFilters, setShowFilters] = useState(false);
 	const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -43,6 +47,29 @@ export default function Sales() {
 	useEffect(() => {
 		loadSales();
 	}, []);
+
+	const handleEditClick = (sale: SaleWithItems) => {
+		if (!isOnline) {
+			setSelectedSale(sale);
+			setShowReminderDialog(true);
+		} else {
+			setEditingSale(sale);
+		}
+	};
+
+	const handleAddReminder = async () => {
+		if (!selectedSale) return;
+
+		try {
+			await addReminder(selectedSale.id, reminderNote);
+			toast.success('Recordatorio guardado');
+			setShowReminderDialog(false);
+			setSelectedSale(null);
+			setReminderNote('');
+		} catch (error) {
+			toast.error('Error al guardar el recordatorio');
+		}
+	};
 
 	// Filtrar y ordenar ventas
 	const filteredSales = sales
@@ -189,6 +216,15 @@ export default function Sales() {
 					</div>
 				)}
 			</div>
+			<div className='mb-0.5'>
+				<p className="text-sm text-gray-700">
+					Mostrando <span className="font-medium">{startIndex + 1}</span> al{' '}
+					<span className="font-medium">
+						{Math.min(startIndex + ITEMS_PER_PAGE, filteredSales.length)} ventas
+					</span>{' '}
+					de <span className="font-medium">{filteredSales.length}</span>
+				</p>
+			</div>
 
 			<div className="bg-white rounded-lg shadow overflow-hidden">
 				<div className="overflow-x-auto">
@@ -234,20 +270,24 @@ export default function Sales() {
 							{paginatedSales.map((sale) => (
 								<tr key={sale.id} className="hover:bg-pink-50">
 									<td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-										<div className='flex flex-col justify-center items-center'>
-											<p>{new Date(sale.date).toLocaleDateString("es-ES")}</p>
-											<p>{new Date(sale.date).toLocaleTimeString("en-US", {hour: 'numeric', minute: '2-digit', hour12: true})}</p>
+										<div className="flex flex-col justify-center items-center">
+											<p>{new Date(sale.date).toLocaleDateString('es-ES')}</p>
+											<p>
+												{new Date(sale.date).toLocaleTimeString('en-US', {
+													hour: 'numeric',
+													minute: '2-digit',
+													hour12: true,
+												})}
+											</p>
 										</div>
 									</td>
 									<td className="px-6 py-4 text-sm text-gray-900">
 										<ul className="list-disc list-inside w-52">
 											{sale.items.map((item) => (
 												<li key={item.id}>
-													<span className='font-medium'>
-														{item.product.name}
-													</span>
-													<span className='italic ml-1'>
-													({item.quantity} x Bs.{' '} {item.price.toFixed(2)})
+													<span className="font-medium">{item.product.name}</span>
+													<span className="italic ml-1">
+														({item.quantity} x Bs. {item.price.toFixed(2)})
 													</span>
 												</li>
 											))}
@@ -261,12 +301,21 @@ export default function Sales() {
 									</td>
 									<td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
 										<div className="flex justify-end space-x-2">
-											<button
-												onClick={() => setEditingSale(sale)}
-												className="text-indigo-600 hover:text-indigo-900"
-											>
-												<Edit2 size={20} />
-											</button>
+											{isOnline ? (
+												<button
+													onClick={() => handleEditClick(sale)}
+													className="text-indigo-600 hover:text-indigo-900"
+												>
+													<Edit2 size={20} />
+												</button>
+											) : (
+												<button
+													onClick={() => handleEditClick(sale)}
+													className="text-amber-600 hover:text-amber-900"
+												>
+													<Bell size={20} />
+												</button>
+											)}
 											<button
 												onClick={() => handleDeleteClick(sale)}
 												className="text-red-600 hover:text-red-900"
@@ -279,6 +328,103 @@ export default function Sales() {
 							))}
 						</tbody>
 					</table>
+					{/* Diálogo de recordatorio */}
+					{showReminderDialog && (
+										<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+											<div className="bg-white rounded-lg max-w-md w-full p-6">
+												<h3 className="text-lg font-semibold mb-4">
+													Crear recordatorio de edición
+												</h3>
+												<p className="text-sm text-gray-600 mb-4">
+													No hay conexión disponible. Puedes crear un recordatorio para
+													editar esta venta cuando vuelvas a estar online.
+												</p>
+												<textarea
+													className="w-full p-2 border rounded-md mb-4"
+													placeholder="Nota (opcional)"
+													value={reminderNote}
+													onChange={(e) => setReminderNote(e.target.value)}
+													rows={3}
+												/>
+												<div className="flex justify-end space-x-3">
+													<button
+														onClick={() => {
+															setShowReminderDialog(false);
+															setSelectedSale(null);
+															setReminderNote('');
+														}}
+														className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-md"
+													>
+														Cancelar
+													</button>
+													<button
+														onClick={handleAddReminder}
+														className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+													>
+														Guardar recordatorio
+													</button>
+												</div>
+											</div>
+										</div>
+									)}
+
+									{/* Lista de recordatorios pendientes (mostrar solo cuando hay conexión) */}
+									{isOnline && reminders.filter((r) => r.status === 'pending').length > 0 && (
+										<div className="fixed bottom-4 right-4">
+											<div className="bg-white rounded-lg shadow-lg p-4 max-w-sm">
+												<h4 className="text-lg font-semibold mb-2">
+													Recordatorios pendientes
+												</h4>
+												<div className="space-y-2">
+													{reminders
+														.filter((r) => r.status === 'pending')
+														.map((reminder) => {
+															const sale = sales.find(
+																(s) => s.id === reminder.saleId
+															);
+															return (
+																<div
+																	key={reminder.id}
+																	className="flex items-center justify-between p-2 bg-gray-50 rounded-md"
+																>
+																	<div>
+																		<p className="text-sm font-medium">
+																			Venta del{' '}
+																			{new Date(
+																				sale?.date || ''
+																			).toLocaleDateString()}
+																		</p>
+																		{reminder.note && (
+																			<p className="text-xs text-gray-600">
+																				{reminder.note}
+																			</p>
+																		)}
+																	</div>
+																	<div className="flex space-x-2">
+																		<button
+																			onClick={() => {
+																				if (sale) setEditingSale(sale);
+																			}}
+																			className="text-indigo-600 hover:text-indigo-900"
+																		>
+																			<Edit2 size={18} />
+																		</button>
+																		<button
+																			onClick={() =>
+																				completeReminder(reminder.id)
+																			}
+																			className="text-green-600 hover:text-green-900"
+																		>
+																			<Check size={18} />
+																		</button>
+																	</div>
+																</div>
+															);
+														})}
+												</div>
+											</div>
+										</div>
+									)}
 				</div>
 
 				{/* Paginación */}

@@ -486,3 +486,96 @@ export const useProductsStore = create<ProductsState>((set, get) => ({
 		}
 	},
 }));
+
+// Funciones auxiliares
+/* async function syncProductStock(product: Product) {
+	const { data: currentProduct, error: selectError } = await supabase
+	  .from('products')
+	  .select('stock')
+	  .eq('id', product.id)
+	  .single();
+  
+	if (selectError) throw selectError;
+  
+	if (currentProduct) {
+	  const pendingChanges = product.pending_stock_changes || 0;
+	  const newStock = Math.max(0, currentProduct.stock - pendingChanges);
+  
+	  const { error: updateError } = await supabase
+		.from('products')
+		.update({ stock: newStock })
+		.eq('id', product.id);
+  
+	  if (!updateError) {
+		await db.products.update(product.id, {
+		  stock: newStock,
+		  pending_stock_changes: 0,
+		});
+	  } else {
+		throw updateError;
+	  }
+	}
+  }
+  
+  async function syncOperation(op: PendingOperation) {
+	switch (op.type) {
+	  case 'create': {
+		const { pending_image, ...productData } = op.data;
+  
+		if (pending_image) {
+		  const imageUrl = await uploadImage(pending_image);
+		  productData.image_url = imageUrl;
+		}
+  
+		const { error } = await supabase.from(op.table).insert(productData);
+		if (error) throw error;
+		break;
+	  }
+	  case 'update': {
+		const { pending_image, ...updateData } = op.data;
+  
+		if (pending_image) {
+		  const imageUrl = await uploadImage(pending_image);
+		  updateData.image_url = imageUrl;
+		}
+  
+		const { error } = await supabase
+		  .from(op.table)
+		  .update(updateData)
+		  .eq('id', op.data.id);
+		if (error) throw error;
+		break;
+	  }
+	  case 'delete': {
+		const { error } = await supabase
+		  .from(op.table)
+		  .delete()
+		  .eq('id', op.data.id);
+		if (error) throw error;
+		break;
+	  }
+	}
+	await db.pendingOperations.delete(op.id);
+  }
+  
+  async function uploadImage(base64Image: string): Promise<string> {
+	const response = await fetch(base64Image);
+	const blob = await response.blob();
+	const fileExt = blob.type.split('/')[1] || 'jpg';
+	const fileName = `${uuidv4()}.${fileExt}`;
+  
+	const { error: uploadError } = await supabase.storage
+	  .from('products')
+	  .upload(fileName, blob, {
+		cacheControl: '3600',
+		upsert: false,
+	  });
+  
+	if (uploadError) throw uploadError;
+  
+	const { data: { publicUrl } } = supabase.storage
+	  .from('products')
+	  .getPublicUrl(fileName);
+  
+	return publicUrl;
+  } */

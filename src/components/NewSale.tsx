@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { X } from 'lucide-react';
 import { useSalesStore } from '../store/sales';
 import { Database } from '../lib/database.types';
@@ -19,6 +19,7 @@ interface NewSaleProps {
 }
 
 export default function NewSale({ onClose }: NewSaleProps) {
+	const formId = useId();  // Añade esto
 	const [items, setItems] = useState<SaleItem[]>([]);
 	const [paymentMethod, setPaymentMethod] = useState<'QR' | 'EFECTIVO'>('EFECTIVO');
 	const [isLoading, setIsLoading] = useState(false);
@@ -96,10 +97,11 @@ export default function NewSale({ onClose }: NewSaleProps) {
 
 					<div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-4 border-t gap-4 sm:gap-0">
 						<div className="flex sm:flex-row gap-4">
-							<label className="inline-flex items-center text-lg">
+							<label className="inline-flex items-center text-lg" htmlFor={`${formId}-efectivo`}>
 								<input
 									type="radio"
 									className="form-radio accent-pink-400 "
+									id={`${formId}-efectivo`}  // ID único
 									name="paymentMethod"
 									value="EFECTIVO"
 									checked={paymentMethod === 'EFECTIVO'}

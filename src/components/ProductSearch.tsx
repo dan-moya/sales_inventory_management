@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { Search } from 'lucide-react';
 import { useProductsStore } from '../store/products';
 import { Database } from '../lib/database.types';
@@ -10,6 +10,7 @@ interface ProductSearchProps {
 }
 
 export default function ProductSearch({ onSelect }: ProductSearchProps) {
+	const searchId = useId();  // Generar ID único para el componente
 	const [searchTerm, setSearchTerm] = useState('');
 	const [isOpen, setIsOpen] = useState(false);
 	const [showHidden, setShowHidden] = useState(false);
@@ -39,6 +40,7 @@ export default function ProductSearch({ onSelect }: ProductSearchProps) {
 					/>
 					<input
 						type="text"
+						id={`${searchId}-search`}  // ID único
 						className="pl-10 p-1 w-full rounded-md border-gray-300 shadow-lg focus:border-indigo-500 focus:ring-indigo-500"
 						placeholder="Buscar productos..."
 						value={searchTerm}
@@ -77,9 +79,10 @@ export default function ProductSearch({ onSelect }: ProductSearchProps) {
 			</div>
 
 			<div className="flex items-center">
-				<label className="inline-flex items-center">
+				<label className="inline-flex items-center" htmlFor={`${searchId}-show-hidden`}>
 					<input
 						type="checkbox"
+						id={`${searchId}-show-hidden`}  // ID único
 						className="form-checkbox text-indigo-600"
 						checked={showHidden}
 						onChange={(e) => setShowHidden(e.target.checked)}

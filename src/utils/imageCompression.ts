@@ -1,53 +1,63 @@
-export async function compressImage(file: File): Promise<File> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = (event) => {
-        const img = new Image();
-        img.src = event.target?.result as string;
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800;
-          const MAX_HEIGHT = 800;
-          let width = img.width;
-          let height = img.height;
-  
-          if (width > height) {
-            if (width > MAX_WIDTH) {
-              height *= MAX_WIDTH / width;
-              width = MAX_WIDTH;
+export async function compressImage(file: File, size = 500): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('No se pudo obtener el contexto del canvas'));
+          return;
+        }
+
+        // Determinar las dimensiones del recorte cuadrado
+        const minDimension = Math.min(img.width, img.height);
+        const sourceX = (img.width - minDimension) / 2;
+        const sourceY = (img.height - minDimension) / 2;
+
+        // Configurar el canvas para el tamaño deseado
+        canvas.width = size;
+        canvas.height = size;
+
+        // Dibujar la imagen recortada y redimensionada
+        ctx.drawImage(
+          img,
+          sourceX,
+          sourceY,
+          minDimension,
+          minDimension,
+          0,
+          0,
+          size,
+          size
+        );
+
+        // Convertir a Blob/File
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('Error al convertir canvas a blob'));
+              return;
             }
-          } else {
-            if (height > MAX_HEIGHT) {
-              width *= MAX_HEIGHT / height;
-              height = MAX_HEIGHT;
-            }
-          }
-  
-          canvas.width = width;
-          canvas.height = height;
-  
-          const ctx = canvas.getContext('2d');
-          ctx?.drawImage(img, 0, 0, width, height);
-  
-          canvas.toBlob(
-            (blob) => {
-              if (!blob) {
-                reject(new Error('Canvas to Blob conversion failed'));
-                return;
-              }
-              const compressedFile = new File([blob], file.name, {
-                type: 'image/jpeg',
-                lastModified: Date.now(),
-              });
-              resolve(compressedFile);
-            },
-            'image/jpeg',
-            0.7 // Calidad de compresión (0.7 = 70%)
-          );
-        };
-        img.onerror = reject;
+            const compressedFile = new File([blob], file.name, {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            });
+            resolve(compressedFile);
+          },
+          'image/jpeg',
+          0.8 // 80% de calidad
+        );
       };
-      reader.onerror = reject;
-    });
-  }
+      img.onerror = reject;
+    };
+    reader.onerror = reject;
+  });
+}
+
+export async function createThumbnail(file: File): Promise<File> {
+  return compressImage(file, 150);
+}

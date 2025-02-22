@@ -1,12 +1,15 @@
-import { useState } from 'react';
-import { Search, Edit2, EyeOff, Eye, Filter, Trash2 } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Search, EyeOff, Eye, Filter, Trash2, X, Package, DollarSign, TrendingUp } from 'lucide-react';
 import { useProductsStore } from '../store/products';
+import { useSalesStore } from '../store/sales';
 import ProductForm from './ProductForm';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 import { Database } from '../lib/database.types';
 import toast from 'react-hot-toast';
 
 type Product = Database['public']['Tables']['products']['Row'];
+
+const ITEMS_PER_PAGE = 5; // 50
 
 export default function ProductList() {
 	const {
@@ -21,9 +24,19 @@ export default function ProductList() {
 		unhideProduct,
 		checkHasSales,
 	} = useProductsStore();
+
+	const { sales } = useSalesStore();
 	const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 	const [showFilters, setShowFilters] = useState(false);
 	const [showHidden, setShowHidden] = useState(false);
+	const [currentPage, setCurrentPage] = useState(1);
+	const [previewImage, setPreviewImage] = useState<string | null>(null);
+	const [previewProduct, setPreviewProduct] = useState<Product | null>(null);
+	const [productStats, setProductStats] = useState<{
+		totalSold: number;
+		totalRevenue: number;
+		totalProfit: number;
+	} | null>(null);
 	const [deleteDialog, setDeleteDialog] = useState<{
 		isOpen: boolean;
 		product: Product | null;
@@ -41,14 +54,64 @@ export default function ProductList() {
 		product: null,
 	});
 
-	const filteredProducts = products.filter((product) => {
-		const matchesSearch =
-			product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-			product.code.toLowerCase().includes(searchTerm.toLowerCase());
-		const matchesCategory = !selectedCategory || product.category_id === selectedCategory;
-		const matchesVisibility = showHidden ? product.is_hidden : !product.is_hidden;
-		return matchesSearch && matchesCategory && matchesVisibility;
-	});
+	const [hasSales, setHasSales] = useState<{ [key: string]: boolean }>({});
+	useEffect(() => {
+		const fetchSalesData = async () => {
+			const salesData: { [key: string]: boolean } = {};
+			const promises = products.map(async (product) => {
+				const sales = await checkHasSales(product.id);
+				salesData[product.id] = sales;
+			});
+			await Promise.all(promises);
+			setHasSales(salesData);
+		};
+		fetchSalesData();
+	}, [products, checkHasSales]);
+
+	const handleImagePreview = (product: Product) => {
+		setPreviewImage(product.image_url);
+		setPreviewProduct(product);
+
+		// Calcular estadísticas de ventas
+		const productSales = sales.flatMap((sale) => sale.items.filter((item) => item.product.id === product.id));
+
+		const totalSold = productSales.reduce((sum, item) => sum + item.quantity, 0);
+		const totalRevenue = productSales.reduce((sum, item) => sum + item.price * item.quantity, 0);
+		const totalProfit = productSales.reduce(
+			(sum, item) => sum + (item.price - product.purchase_price) * item.quantity,
+			0
+		);
+
+		setProductStats({
+			totalSold,
+			totalRevenue,
+			totalProfit,
+		});
+	};
+
+	// Memoized filter function
+	const getFilteredProducts = useCallback(() => {
+		return products.filter((product) => {
+			const matchesSearch =
+				product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+				product.code.toLowerCase().includes(searchTerm.toLowerCase());
+			const matchesCategory = !selectedCategory || product.category_id === selectedCategory;
+			const matchesVisibility = showHidden ? product.is_hidden : !product.is_hidden;
+			return matchesSearch && matchesCategory && matchesVisibility;
+		});
+	}, [products, searchTerm, selectedCategory, showHidden]);
+
+	// Pagination
+	const filteredProducts = getFilteredProducts();
+	const totalPages = Math.ceil(filteredProducts.length / ITEMS_PER_PAGE);
+	const paginatedProducts = filteredProducts.slice(
+		(currentPage - 1) * ITEMS_PER_PAGE,
+		currentPage * ITEMS_PER_PAGE
+	);
+
+	useEffect(() => {
+		setCurrentPage(1);
+	}, [searchTerm, selectedCategory, showHidden]);
 
 	const handleDeleteClick = async (product: Product) => {
 		try {
@@ -112,7 +175,7 @@ export default function ProductList() {
 						<input
 							type="text"
 							placeholder="Buscar productos..."
-							className="w-full pl-12 pr-4 py-3 rounded-lg border border-gray-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors"
+							className="w-full pl-12 pr-4 py-2 rounded-lg border border-gray-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors"
 							value={searchTerm}
 							onChange={(e) => setSearchTerm(e.target.value)}
 						/>
@@ -126,7 +189,7 @@ export default function ProductList() {
 				</div>
 
 				{showFilters && (
-					<div className="p-2 bg-gray-50 rounded-lg space-y-4">
+					<div className="p-4 bg-gray-50 rounded-lg space-y-4">
 						<select
 							className="w-full p-2 rounded-md border-gray-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
 							value={selectedCategory || ''}
@@ -148,105 +211,182 @@ export default function ProductList() {
 									checked={showHidden}
 									onChange={(e) => setShowHidden(e.target.checked)}
 								/>
-								<span  className="ml-2">Mostrar productos ocultos</span>
+								<span className="ml-2">Mostrar productos ocultos</span>
 							</label>
 						</div>
 					</div>
 				)}
 			</div>
 
-			<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-				{filteredProducts.map((product) => (
+			{/* CHECKPOINT */}
+			<div className="grid grid-cols-1 gap-y-3">
+				{paginatedProducts.map((product) => (
 					<div
 						key={product.id}
-						className={`bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow ${
-							product.is_hidden ? 'opacity-75' : ''
-						}`}
+						className={`hover:bg-gray-50 ${
+							product.is_hidden ? 'opacity-60' : ''
+						} border border-gray-100 rounded-lg p-1.5 shadow-md`}
 					>
-						<div className="sm:aspect-w-4 sm:aspect-h-3">
-							{product.image_url ? (
-								<img
-									src={product.image_url}
-									alt={product.name}
-									className="w-full h-48 object-cover"
-								/>
-							) : (
-								<div className="w-full h-48 bg-gray-100 flex items-center justify-center">
-									<span className="text-gray-400">Sin imagen</span>
+						<div className="grid grid-cols-12">
+							<div className="col-span-12">
+								<div className="mb-1">
+									<p className="text-xs">
+										Código: <span className="underline font-medium">{product.code}</span>
+									</p>
+									<p className="text-base font-medium">{product.name}</p>
 								</div>
-							)}
-						</div>
 
-						<div className="p-4">
-							<div className="mb-2">
-								<span className="text-sm text-gray-500">Código:</span>
-								<span className="ml-2 font-medium">{product.code}</span>
-							</div>
-
-							<h3 className="text-lg font-semibold mb-2 line-clamp-2">{product.name}</h3>
-
-							<div className="mb-2">
-								<span className="text-sm text-gray-500">Categoría:</span>
-								<span className="ml-2">
-									{categories.find((c) => c.id === product.category_id)?.name}
-								</span>
-							</div>
-
-							<div className="mb-2">
-								<span className="text-sm text-gray-500">Precio compra:</span>
-								<span className="ml-2">Bs. {product.purchase_price.toFixed(2)}</span>
-							</div>
-
-							<div className="mb-2">
-								<span className="text-sm text-gray-500">Precio venta:</span>
-								<span className="ml-2">Bs. {product.sale_price.toFixed(2)}</span>
-							</div>
-
-							<div className="mb-4">
-								<span className="text-sm text-gray-500">Stock:</span>
-								<span
-									className={`ml-2 font-bold ${
-										product.stock === 0 ? 'text-red-600' : 'text-green-600'
-									}`}
-								>
-									{product.stock}
-								</span>
-							</div>
-
-							<div className="flex justify-end space-x-2 pt-2 border-t">
-								<button
-									onClick={() => setEditingProduct(product)}
-									className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors"
-								>
-									<Edit2 size={20} />
-								</button>
-								{product.is_hidden ? (
-									<button
-										onClick={() => handleUnhide(product)}
-										className="p-2 text-green-600 hover:bg-green-50 rounded-full transition-colors"
+								<div className="grid grid-cols-12">
+									<div
+										onClick={() => handleImagePreview(product)}
+										className="cursor-pointer col-span-3"
 									>
-										<Eye size={20} />
-									</button>
-								) : (
-									<button
-										onClick={() => handleHideClick(product)}
-										className="p-2 text-amber-600 hover:bg-amber-50 rounded-full transition-colors"
-									>
-										<EyeOff size={20} />
-									</button>
-								)}
-								{!product.is_hidden && (
-									<button
-										onClick={() => handleDeleteClick(product)}
-										className="p-2 text-red-600 hover:bg-red-50 rounded-full transition-colors"
-									>
-										<Trash2 size={20} />
-									</button>
-								)}
+										{product.image_url ? (
+											<img
+												src={product.image_url}
+												alt={product.name}
+												className="h-16 w-16 object-cover rounded"
+												loading="lazy"
+											/>
+										) : (
+											<div className="h-12 w-12 bg-gray-100 rounded flex items-center justify-center">
+												<span className="text-xs text-gray-400">Sin imagen</span>
+											</div>
+										)}
+									</div>
+									<div className="col-span-6 flex flex-col justify-center">
+										<p className="text-sm">
+											Compra:{' '}
+											<span className="text-sm font-medium">
+												Bs. {product.purchase_price.toFixed(2)}
+											</span>
+										</p>
+										<p className="text-sm">
+											Venta:{' '}
+											<span className="text-sm font-medium">
+												Bs. {product.sale_price.toFixed(2)}
+											</span>
+										</p>
+									</div>
+									<div className="col-span-1 flex justify-center items-center">
+										<button
+											onClick={() => setEditingProduct(product)}
+											className="text-indigo-600 hover:text-indigo-900 p-0.5"
+										>
+											{/* <Edit2 size={18} /> */}
+											<span
+												className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-lg font-bold ${
+													product.stock === 0
+														? 'bg-red-100 text-red-800'
+														: 'bg-green-100 text-green-800'
+												}`}
+											>
+												{product.stock}
+											</span>
+										</button>
+									</div>
+									<div className="col-span-2 flex items-center justify-center pl-2">
+										{hasSales[product.id] !== undefined ? (
+											hasSales[product.id] ? (
+												product.is_hidden ? (
+													<button
+														onClick={() => handleUnhide(product)}
+														className="text-green-600 hover:text-green-900"
+													>
+														<Eye size={18} />
+													</button>
+												) : (
+													<button
+														onClick={() => handleHideClick(product)}
+														className="text-yellow-600 hover:text-yellow-900"
+													>
+														<EyeOff size={18} />
+													</button>
+												)
+											) : (
+												<button
+													onClick={() => handleDeleteClick(product)}
+													className="text-red-600 hover:text-red-900"
+												>
+													<Trash2 size={18} />
+												</button>
+											)
+										) : (
+											// Placeholder while loading
+											<div className="w-4 h-4 border-2 border-gray-300 rounded-full animate-spin"></div>
+										)}
+									</div>
+								</div>
 							</div>
 						</div>
 					</div>
 				))}
+			</div>
+
+			<div className="bg-white rounded-lg shadow overflow-hidden">
+				{/* Pagination */}
+				{totalPages > 1 && (
+					<div className="px-4 py-3 flex items-center justify-between border-t border-gray-200">
+						<div className="flex-1 flex justify-between sm:hidden">
+							<button
+								onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+								disabled={currentPage === 1}
+								className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+							>
+								Anterior
+							</button>
+							<button
+								onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+								disabled={currentPage === totalPages}
+								className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+							>
+								Siguiente
+							</button>
+						</div>
+						<div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+							<div>
+								<p className="text-sm text-gray-700">
+									Mostrando{' '}
+									<span className="font-medium">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> a{' '}
+									<span className="font-medium">
+										{Math.min(currentPage * ITEMS_PER_PAGE, filteredProducts.length)}
+									</span>{' '}
+									de <span className="font-medium">{filteredProducts.length}</span> resultados
+								</p>
+							</div>
+							<div>
+								<nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+									{Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+										let pageNumber;
+										if (totalPages <= 5) {
+											pageNumber = i + 1;
+										} else if (currentPage <= 3) {
+											pageNumber = i + 1;
+										} else if (currentPage >= totalPages - 2) {
+											pageNumber = totalPages - 4 + i;
+										} else {
+											pageNumber = currentPage - 2 + i;
+										}
+
+										return (
+											<button
+												key={pageNumber}
+												onClick={() => setCurrentPage(pageNumber)}
+												className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+													currentPage === pageNumber
+														? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600'
+														: 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+												}`}
+											>
+												{pageNumber}
+											</button>
+										);
+									})}
+								</nav>
+							</div>
+						</div>
+					</div>
+				)}
 			</div>
 
 			{editingProduct && <ProductForm product={editingProduct} onClose={() => setEditingProduct(null)} />}
@@ -268,6 +408,90 @@ export default function ProductList() {
 				message="¿Estás seguro que deseas ocultar este producto? Podrás volver a mostrarlo cuando lo desees."
 				confirmText="Ocultar"
 			/>
+
+			{/* Image Preview Modal with Sales Stats */}
+			{previewImage && previewProduct && productStats && (
+				<div
+					className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+					onClick={() => {
+						setPreviewImage(null);
+						setPreviewProduct(null);
+						setProductStats(null);
+					}}
+				>
+					<div
+						className="relative max-w-3xl max-h-[90vh] bg-white rounded-lg p-4"
+						onClick={(e) => e.stopPropagation()}
+					>
+						<button
+							onClick={() => {
+								setPreviewImage(null);
+								setPreviewProduct(null);
+								setProductStats(null);
+							}}
+							className="absolute top-2 right-2 bg-red-500 rounded-full p-0.5 text-white z-10"
+						>
+							<X size={24} />
+						</button>
+
+						<div className="flex flex-col md:flex-row gap-3">
+							<div className="flex-1">
+								<img
+									src={previewImage}
+									alt={previewProduct.name}
+									className="w-full h-auto object-contain rounded-lg"
+								/>
+							</div>
+
+							<div className="flex-1">
+								<div className="flex items-center gap-4">
+									<p className="text-sm text-gray-600">Código: {previewProduct.code}</p>
+									<p className="text-xs bg-pink-500 p-1 rounded-lg font-medium text-white">
+										{categories.find((c) => c.id === previewProduct.category_id)?.name}
+									</p>
+								</div>
+								<h3 className="text-lg font-semibold mb-1.5">{previewProduct.name}</h3>
+								<div className="grid grid-cols-1 gap-3.5 ">
+									<div className="bg-blue-50 p-3.5 rounded-lg flex items-center justify-between gap-2">
+										<div className="flex items-center gap-2">
+											<Package className="text-blue-500" size={24} />
+											<p className="text-sm text-blue-600">Unidades Vendidas:</p>
+										</div>
+										<p className="text-xl font-bold text-blue-700 text-center">
+											{productStats.totalSold} de{' '}
+											{previewProduct.stock + productStats.totalSold}
+											{productStats.totalSold >=
+												previewProduct.stock + productStats.totalSold && (
+												<p className=" text-xs text-green-600">(¡Todo vendido!)</p>
+											)}
+										</p>
+									</div>
+
+									<div className="bg-green-50 p-3.5 rounded-lg flex items-center justify-between gap-2">
+										<div className="flex items-center gap-2">
+											<DollarSign className="text-green-500" size={24} />
+											<p className="text-sm text-green-600">Total vendido:</p>
+										</div>
+										<p className="text-xl font-bold text-green-700">
+											Bs. {productStats.totalRevenue.toFixed(2)}
+										</p>
+									</div>
+
+									<div className="bg-purple-50 p-3.5 rounded-lg flex items-center justify-between gap-2">
+										<div className="flex items-center gap-2">
+											<TrendingUp className="text-purple-500" size={24} />
+											<p className="text-sm text-purple-600">Ganancia Neta:</p>
+										</div>
+										<p className="text-xl font-bold text-purple-700 pr-1">
+											Bs. {productStats.totalProfit.toFixed(2)}
+										</p>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

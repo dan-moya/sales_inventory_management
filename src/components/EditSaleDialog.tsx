@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import { X, Plus, Minus, Trash2 } from 'lucide-react';
 import { Database } from '../lib/database.types';
 import LoadingButton from './LoadingButton';
@@ -21,6 +21,7 @@ interface EditSaleDialogProps {
 }
 
 export default function EditSaleDialog({ sale, onClose, onSave }: EditSaleDialogProps) {
+	const formId = useId();  // Generar ID único para el formulario
 	const [isLoading, setIsLoading] = useState(false);
 	const [items, setItems] = useState(sale.items);
 	const [paymentMethod, setPaymentMethod] = useState<'QR' | 'EFECTIVO'>(sale.payment_method);
@@ -155,12 +156,12 @@ export default function EditSaleDialog({ sale, onClose, onSave }: EditSaleDialog
 												</div>
 											</div>
 											<div className='flex items-center gap-x-11 mt-1.5'>
-												<label className='text-sm' htmlFor="edit-price">Editar precio: </label>
+												<label className='text-sm' htmlFor={`${formId}-edit-price-${item.product.id}`}>Editar precio: </label>
 												<div className='ml-0.5'>
 													<span>Bs. </span>
 													<input
 														type="number"
-														id='edit-price'
+														id={`${formId}-edit-price-${item.product.id}`}  // ID único por producto
 														min="0"
 														step="0.01"
 														className="w-14 rounded-md border border-pink-50 shadow-sm focus:border-pink-500 focus:ring-pink-500 ml-0.5"
@@ -190,10 +191,11 @@ export default function EditSaleDialog({ sale, onClose, onSave }: EditSaleDialog
 
 					<div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-4 border-t gap-4 sm:gap-0">
 						<div className="flex sm:flex-row gap-4">
-							<label className="inline-flex items-center text-lg">
+							<label className="inline-flex items-center text-lg" htmlFor={`${formId}-efectivo`}>
 								<input
 									type="radio"
 									className="form-radio accent-pink-400 "
+									id={`${formId}-efectivo`}  // ID único
 									name="paymentMethod"
 									value="EFECTIVO"
 									checked={paymentMethod === 'EFECTIVO'}

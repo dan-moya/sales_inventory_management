@@ -36,6 +36,13 @@ export default function ProductForm({ product, onClose }: ProductFormProps) {
 	const [image, setImage] = useState<File | null>(null);
 	const [pendingImageData, setPendingImageData] = useState<string | null>(null);
 
+	const purchasePrice = parseFloat(formData.purchase_price) || 0;
+    const salePrice = parseFloat(formData.sale_price) || 0;
+    const stock = parseInt(formData.stock) || 0;
+
+    const netProfitPerUnit = salePrice - purchasePrice;
+    const totalNetProfit = netProfitPerUnit * stock;
+
 	useEffect(() => {
 		setupStorage().catch(console.error);
 	}, []);
@@ -113,6 +120,7 @@ export default function ProductForm({ product, onClose }: ProductFormProps) {
 				stock: parseInt(formData.stock),
 				image_url: imageUrl,
 				pending_image: pendingImageData,
+				is_hidden: false, // recién añadido
 			};
 
 			if (product) {
@@ -246,17 +254,29 @@ export default function ProductForm({ product, onClose }: ProductFormProps) {
 						</div>
 					</div>
 
-					<div>
-						<label className="block text-sm font-medium text-gray-700 mb-1">Stock</label>
-						<input
-							type="number"
-							required
-							min="0"
-							className="w-full rounded-md shadow-md p-0.5 ring-2 ring-pink-300 focus:outline-none"
-							value={formData.stock}
-							onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
-							placeholder='0'
-						/>
+					<div className="grid grid-cols-5 md:grid-cols-2 gap-6">
+						<div className='col-span-1 w-16'>
+							<label className="block text-sm font-medium text-gray-700 mb-1">Stock</label>
+							<input
+								type="number"
+								required
+								min="0"
+								className="w-full rounded-md shadow-md p-0.5 ring-2 ring-pink-300 focus:outline-none"
+								value={formData.stock}
+								onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
+								placeholder='0'
+							/>
+						</div>
+						<div className='col-span-4 ml-7 w-48 bg-pink-100 p-2 rounded-lg'>
+							<p className="text-sm font-semibold underline">Ganancia:</p>
+							{/* <p>Costo total: Bs. {(purchasePrice * stock).toFixed(2)}</p> */}
+							<p className='text-sm'>Unidad:
+								<span className='text-base px-2.5 font-medium'>Bs. {netProfitPerUnit.toFixed(2)}</span>
+							</p>
+							<p className='text-sm'>Total:
+								<span className='text-base px-6 font-medium'>Bs. {totalNetProfit.toFixed(2)}</span>
+							</p>
+						</div>
 					</div>
 
 					<div>

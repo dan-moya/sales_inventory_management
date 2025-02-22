@@ -24,11 +24,13 @@ export default function ImagePreview({ file, currentUrl }: ImagePreviewProps) {
 
   return (
     <div className="mt-2">
-      <img
-        src={previewUrl || currentUrl}
-        alt="Vista previa"
-        className="h-20 w-20 object-cover rounded-lg"
-      />
+      <div className="relative w-20 h-20 rounded-lg overflow-hidden">
+        <img
+          src={previewUrl || currentUrl}
+          alt="Vista previa"
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+      </div>
     </div>
   );
 }

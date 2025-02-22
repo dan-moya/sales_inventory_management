@@ -2,8 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
 import { Database } from '../lib/database.types';
 import { useProductsStore } from './products';
-// import { showNotification } from '../utils/notifications';
-import { db } from '../lib/db';
+import { db, SaleReminder } from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
 
 type Product = Database['public']['Tables']['products']['Row'];
@@ -14,22 +13,36 @@ type SaleWithItems = Sale & {
 	items: Array<SaleItem & { product: Product }>;
 };
 
-// Definir el tipo para las operaciones pendientes
 type PendingOperation = {
-    id: string;
-    type: string;
-    table: string;
-    data: any;
-    priority: number;
-    parentId?: string;
+	id: string;
+	type: 'create' | 'update' | 'delete' | 'stock_update';
+	table: string;
+	data: any;
+	priority: number;
+	timestamp: number;
+	parentId?: string;
+	groupId?: string;
+	status: 'pending' | 'processing' | 'error';
+	error?: string;
+	retryCount: number;
 };
 
-// Interfaz principal del estado de ventas
+/* type SaleStats = {
+	totalAmount: number;
+	netProfit: number;
+	count: number;
+  }; */
+
+  type ProductSaleStats = {
+	productId: string;
+	productName: string;
+	totalQuantity: number;
+  };
+
 interface SalesState {
-	isOnline: boolean; // Estado de conexión a internet
-	isLoading: boolean; // Indicador de carga
-	setIsOnline: (status: boolean) => void; // Actualiza el estado de conexión
-	sales: SaleWithItems[]; // Lista completa de ventas
+	isOnline: boolean;
+	isLoading: boolean;
+	sales: SaleWithItems[];
 	todaySales: number;
 	yesterdaySales: number;
 	monthSales: number;
@@ -38,15 +51,37 @@ interface SalesState {
 	yesterdaySalesList: SaleWithItems[];
 	monthSalesList: SaleWithItems[];
 	allSales: SaleWithItems[];
+	weekSales: number;
+	weekSalesList: SaleWithItems[];
+	netProfits: {
+	  today: number;
+	  yesterday: number;
+	  week: number;
+	  month: number;
+	  total: number;
+	};
+	productStats: {
+		totalStock: number;
+		uniqueProducts: number;
+		mostSoldToday: ProductSaleStats | null;
+		mostSoldThisWeek: ProductSaleStats | null;
+		mostSoldThisMonth: ProductSaleStats | null;
+		mostSoldOverall: ProductSaleStats | null;
+	};
+	reminders: SaleReminder[]; // Añadir esto
+	setIsOnline: (status: boolean) => void;
 	loadSales: () => Promise<void>;
 	createSale: (
-		items: Array<{ productId: string; quantity: number; price: number }>,
-		paymentMethod: 'QR' | 'EFECTIVO'
+	  items: Array<{ productId: string; quantity: number; price: number }>,
+	  paymentMethod: 'QR' | 'EFECTIVO'
 	) => Promise<void>;
 	deleteSale: (saleId: string) => Promise<void>;
 	updateSale: (updatedSale: SaleWithItems) => Promise<void>;
-	syncPendingSales: () => Promise<void>; // Sincroniza ventas pendientes
-}
+	syncPendingSales: () => Promise<void>;
+	addReminder: (saleId: string, note?: string) => Promise<void>;
+	completeReminder: (reminderId: string) => Promise<void>;
+	loadReminders: () => Promise<void>;
+  }
 
 export const useSalesStore = create<SalesState>((set, get) => ({
 	isLoading: false,
@@ -59,21 +94,76 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 	yesterdaySalesList: [],
 	monthSalesList: [],
 	allSales: [],
+	weekSales: 0,
+	weekSalesList: [],
+	netProfits: {
+		today: 0,
+		yesterday: 0,
+		week: 0,
+		month: 0,
+		total: 0
+	},
+	productStats: {
+		totalStock: 0,
+		uniqueProducts: 0,
+		mostSoldToday: null,
+		mostSoldThisWeek: null,
+		mostSoldThisMonth: null,
+		mostSoldOverall: null,
+	},
 	isOnline: navigator.onLine,
+	reminders: [],
+
+	addReminder: async (saleId: string, note?: string) => {
+		const reminder: SaleReminder = {
+		  id: uuidv4(),
+		  saleId,
+		  note,
+		  createdAt: new Date().toISOString(),
+		  status: 'pending'
+		};
+	
+		await db.saleReminders.add(reminder);
+		set(state => ({
+			...state, //nuevo
+		  reminders: [...state.reminders, reminder]
+		}));
+	  },
+	
+	  completeReminder: async (reminderId: string) => {
+		await db.saleReminders.update(reminderId, { status: 'completed' });
+		set(state => ({
+			...state, //nuevo
+		  reminders: state.reminders.map(r => 
+			r.id === reminderId ? { ...r, status: 'completed' } : r
+		  )
+		}));
+	  },
+	
+	/* loadReminders: async () => {
+		const reminders = await db.saleReminders.toArray();
+		set({ reminders });
+	}, */
+
+	loadReminders: async () => {
+		const reminders = await db.saleReminders.toArray();
+		set((state) => ({
+			...state,
+			reminders
+		}));
+	},
 
 	setIsOnline: (online) =>
 		set({
 			isOnline: online,
 		}),
 
-	// Función principal para cargar ventas
 	loadSales: async () => {
 		set({ isLoading: true });
 		try {
 			let salesData: SaleWithItems[] = [];
 
 			if (get().isOnline) {
-				// Obtener datos de Supabase (online)
 				const { data: sales, error: salesError } = await supabase
 					.from('sales')
 					.select('*')
@@ -82,7 +172,6 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 				if (salesError) throw salesError;
 
 				if (sales) {
-					// Procesar items de cada venta
 					const salesWithItems = await Promise.all(
 						sales.map(async (sale) => {
 							const { data: saleItems, error: itemsError } = await supabase
@@ -99,7 +188,6 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 						})
 					);
 
-					// Guardar en IndexedDB para modo offline
 					await db.sales.clear();
 					await db.saleItems.clear();
 
@@ -124,7 +212,6 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 				}
 			}
 
-			// Obtener ventas almacenadas localmente
 			const offlineSales = await db.sales.toArray();
 			const salesWithItems = await Promise.all(
 				offlineSales.map(async (sale) => {
@@ -150,7 +237,6 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 				})
 			);
 
-			// Combinar datos online/offline y procesar
 			const allSales = get().isOnline
 				? [
 						...salesData,
@@ -169,13 +255,12 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 		}
 	},
 
-	// Crear nueva venta (funciona en online/offline)
 	createSale: async (items, paymentMethod) => {
 		const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 		const saleId = uuidv4();
 		const now = new Date().toISOString();
+		const groupId = uuidv4(); // Generar un groupId único para todas las operaciones relacionadas
 
-		// Crear objeto de venta
 		const newSale = {
 			id: saleId,
 			date: now,
@@ -184,7 +269,6 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 			created_at: now,
 		};
 
-		// Crear items de venta
 		const saleItems = items.map((item) => ({
 			id: uuidv4(),
 			sale_id: saleId,
@@ -195,12 +279,10 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 		}));
 
 		try {
-			// Guardar en IndexedDB (localmente) primero
 			await db.sales.add(newSale);
 			console.log('[OFFLINE] Venta guardada:', saleId);
 
 			for (const item of saleItems) {
-				// Actualizar stock local
 				const product = await db.products.get(item.product_id);
 				if (product) {
 					await db.saleItems.add({
@@ -218,25 +300,20 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 				}
 			}
 
-			// Si hay conexión: sincronizar con servidor
 			if (get().isOnline) {
-				// Si hay conexión, crear la venta en Supabase primero
 				const { error: saleError } = await supabase.from('sales').insert(newSale);
 
 				if (saleError) {
 					throw saleError;
 				}
 
-				// Una vez creada la venta, crear los items
 				const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
 
 				if (itemsError) {
-					// Si hay error al crear los items, eliminar la venta
 					await supabase.from('sales').delete().eq('id', saleId);
 					throw itemsError;
 				}
 
-				// Actualizar el stock en Supabase
 				for (const item of saleItems) {
 					const { data: product } = await supabase
 						.from('products')
@@ -250,15 +327,16 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 					}
 				}
 			} else {
-				// Si no hay conexión, agregar a operaciones pendientes
-				await db.addPendingOperation('create', 'sales', newSale, 1);
+				// Crear la venta con alta prioridad
+				await db.addPendingOperation('create', 'sales', newSale, 3, undefined, groupId);
+				
+				// Crear los items con prioridad menor y vinculados a la venta
 				for (const item of saleItems) {
-					await db.addPendingOperation('create', 'sale_items', item, 0);
+					await db.addPendingOperation('create', 'sale_items', item, 2, saleId, groupId);
 				}
 				console.log('[OFFLINE] Operaciones pendientes guardadas');
 			}
 
-			// Actualizar estados
 			await get().loadSales();
 			await useProductsStore.getState().loadProducts();
 		} catch (error) {
@@ -267,14 +345,13 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 		}
 	},
 
-	// Eliminar venta y revertir stock
 	deleteSale: async (saleId: string) => {
 		try {
-			// Obtener los items de la venta antes de eliminarla
 			const saleItems = await db.saleItems.where('sale_id').equals(saleId).toArray();
+			const groupId = uuidv4(); // Generar un groupId único para todas las operaciones relacionadas
 
 			if (get().isOnline) {
-				// Primero actualizar el stock de los productos
+				// Primero actualizar el stock
 				for (const item of saleItems) {
 					const { data: product } = await supabase
 						.from('products')
@@ -283,7 +360,6 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 						.single();
 
 					if (product) {
-						// Devolver la cantidad vendida al stock
 						const newStock = product.stock + item.quantity;
 						const { error: updateError } = await supabase
 							.from('products')
@@ -294,17 +370,15 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 					}
 				}
 
-				// Luego eliminar los items de la venta
+				// Luego eliminar los items
 				const { error: itemsError } = await supabase.from('sale_items').delete().eq('sale_id', saleId);
-
 				if (itemsError) throw itemsError;
 
 				// Finalmente eliminar la venta
 				const { error: saleError } = await supabase.from('sales').delete().eq('id', saleId);
-
 				if (saleError) throw saleError;
 			} else {
-				// En modo offline, actualizar el stock local
+				// Actualizar stock local
 				for (const item of saleItems) {
 					const product = await db.products.get(item.product_id);
 					if (product) {
@@ -318,23 +392,23 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 					}
 				}
 
-				// Guardar operaciones pendientes para sincronización
+				// Primero eliminar los items con alta prioridad
 				for (const item of saleItems) {
-					await db.addPendingOperation('delete', 'sale_items', { id: item.id }, 1);
+					await db.addPendingOperation('delete', 'sale_items', { id: item.id }, 3, undefined, groupId);
 				}
-				await db.addPendingOperation('delete', 'sales', { id: saleId }, 0);
+				
+				// Luego eliminar la venta con menor prioridad
+				await db.addPendingOperation('delete', 'sales', { id: saleId }, 2, undefined, groupId);
 			}
 
 			// Actualizar estado local
 			await db.saleItems.where('sale_id').equals(saleId).delete();
 			await db.sales.delete(saleId);
 
-			// Actualizar estado
 			set((state) => ({
 				sales: state.sales.filter((sale) => sale.id !== saleId),
 			}));
 
-			// Recargar ventas y productos para actualizar totales y stock
 			await get().loadSales();
 			await useProductsStore.getState().loadProducts();
 		} catch (error) {
@@ -350,53 +424,36 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 				items: updatedSale.items.length,
 				isOnline: get().isOnline,
 			});
-	
+
 			const originalSale = get().sales.find((s) => s.id === updatedSale.id);
 			if (!originalSale) {
 				throw new Error('Venta no encontrada');
 			}
-	
-			// 1. Calcular diferencia de cantidades para cada producto
+
+			const groupId = uuidv4(); // Generar un groupId único para todas las operaciones relacionadas
+
+			// Calcular cambios de stock
 			const quantityChanges = new Map<string, number>();
-	
-			// Agrupar items originales por producto
 			originalSale.items.forEach((item) => {
 				const current = quantityChanges.get(item.product.id) || 0;
 				quantityChanges.set(item.product.id, current + item.quantity);
 			});
-	
-			// Restar items nuevos
+
 			updatedSale.items.forEach((item) => {
 				const current = quantityChanges.get(item.product.id) || 0;
 				quantityChanges.set(item.product.id, current - item.quantity);
 			});
-	
+
 			if (get().isOnline) {
-				// 1. Eliminar todos los items existentes
+				// 1. Eliminar items antiguos
 				const { error: deleteError } = await supabase
 					.from('sale_items')
 					.delete()
 					.eq('sale_id', updatedSale.id);
-	
+
 				if (deleteError) throw deleteError;
-	
-				// 2. Insertar los nuevos items
-				const newItems = updatedSale.items.map(item => ({
-					id: item.id,
-					sale_id: updatedSale.id,
-					product_id: item.product.id,
-					quantity: item.quantity,
-					price: item.price,
-					created_at: new Date().toISOString()
-				}));
-	
-				const { error: insertError } = await supabase
-					.from('sale_items')
-					.insert(newItems);
-	
-				if (insertError) throw insertError;
-	
-				// 3. Actualizar la venta principal
+
+				// 2. Actualizar la venta principal
 				const { error: saleError } = await supabase
 					.from('sales')
 					.update({
@@ -404,17 +461,31 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 						total: updatedSale.total,
 					})
 					.eq('id', updatedSale.id);
-	
+
 				if (saleError) throw saleError;
-	
-				// 4. Actualizar stock de productos
+
+				// 3. Crear nuevos items
+				const { error: itemsError } = await supabase.from('sale_items').insert(
+					updatedSale.items.map(item => ({
+						id: item.id,
+						sale_id: updatedSale.id,
+						product_id: item.product.id,
+						quantity: item.quantity,
+						price: item.price,
+						created_at: new Date().toISOString()
+					}))
+				);
+
+				if (itemsError) throw itemsError;
+
+				// 4. Actualizar stock
 				for (const [productId, stockChange] of quantityChanges) {
 					const { data: product } = await supabase
 						.from('products')
 						.select('stock')
 						.eq('id', productId)
 						.single();
-	
+
 					if (product) {
 						const newStock = Math.max(0, product.stock + stockChange);
 						await supabase
@@ -424,70 +495,98 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 					}
 				}
 			} else {
-				// Modo offline
-				const saleData = {
-					id: updatedSale.id,
-					date: updatedSale.date,
-					payment_method: updatedSale.payment_method,
-					total: updatedSale.total,
-					created_at: updatedSale.created_at,
-				};
-	
-				// 1. Actualizar venta local
-				await db.sales.put(saleData);
-	
-				// 2. Eliminar items antiguos localmente
-				await db.saleItems.where('sale_id').equals(updatedSale.id).delete();
-	
-				// 3. Insertar nuevos items
-				for (const item of updatedSale.items) {
-					await db.saleItems.put({
-						...item,
-						product: item.product,
-					});
+				// 1. Obtener items originales
+				const originalItems = await db.saleItems.where('sale_id').equals(updatedSale.id).toArray();
+
+				// 2. Eliminar items antiguos (prioridad más alta)
+				for (const item of originalItems) {
+					await db.addPendingOperation(
+						'delete',
+						'sale_items',
+						{ id: item.id },
+						4, // Prioridad más alta
+						updatedSale.id,
+						groupId
+					);
 				}
-	
-				// 4. Actualizar stock local
+
+				// 3. Actualizar la venta principal (prioridad media)
+				await db.addPendingOperation(
+					'update',
+					'sales',
+					{
+						id: updatedSale.id,
+						payment_method: updatedSale.payment_method,
+						total: updatedSale.total,
+						date: updatedSale.date,
+						created_at: updatedSale.created_at
+					},
+					3,
+					undefined,
+					groupId
+				);
+
+				// 4. Crear nuevos items (prioridad más baja)
+				for (const item of updatedSale.items) {
+					const newItemData = {
+						id: uuidv4(),
+						sale_id: updatedSale.id,
+						product_id: item.product.id,
+						quantity: item.quantity,
+						price: item.price,
+						created_at: new Date().toISOString()
+					};
+
+					await db.addPendingOperation(
+						'create',
+						'sale_items',
+						newItemData,
+						2,
+						updatedSale.id,
+						groupId
+					);
+				}
+
+				// 5. Actualizar stock local
 				for (const [productId, stockChange] of quantityChanges) {
 					const product = await db.products.get(productId);
 					if (product) {
 						const newStock = Math.max(0, product.stock + stockChange);
-						const pendingChange = (product.pending_stock_changes || 0) + (-stockChange);
-	
+						const pendingChange = (product.pending_stock_changes || 0) - stockChange;
+
 						await db.products.update(productId, {
 							stock: newStock,
 							pending_stock_changes: pendingChange,
 						});
 					}
 				}
-	
-				// 5. Agregar operaciones pendientes
-				await db.addPendingOperation('update', 'sales', saleData, 2);
-	
-				// Agregar operaciones para los items
+
+				// 6. Actualizar estado local
+				await db.sales.put({
+					id: updatedSale.id,
+					date: updatedSale.date,
+					payment_method: updatedSale.payment_method,
+					total: updatedSale.total,
+					created_at: updatedSale.created_at
+				});
+
+				// Actualizar items localmente
+				await db.saleItems.where('sale_id').equals(updatedSale.id).delete();
 				for (const item of updatedSale.items) {
-					await db.addPendingOperation('update', 'sale_items', {
-						id: item.id,
-						sale_id: updatedSale.id,
-						product_id: item.product.id,
-						quantity: item.quantity,
-						price: item.price,
-						created_at: new Date().toISOString(),
-					}, 1);
+					await db.saleItems.put({
+						...item,
+						product: item.product
+					});
 				}
 			}
-	
-			// Actualizar estado local
+
 			set((state) => ({
-				sales: state.sales.map((sale) => 
-					sale.id === updatedSale.id ? updatedSale : sale
-				),
+				sales: state.sales.map((sale) => (sale.id === updatedSale.id ? updatedSale : sale)),
 			}));
-	
+
 			await get().loadSales();
 			await useProductsStore.getState().loadProducts();
-	
-			console.log('[UPDATE_SALE] Actualización completada exitosamente');
+
 		} catch (error) {
 			console.error('[UPDATE_SALE] Error al actualizar venta:', error);
 			throw error;
@@ -495,148 +594,222 @@ export const useSalesStore = create<SalesState>((set, get) => ({
 	},
 
 	syncPendingSales: async () => {
-		if (!get().isOnline) return;
+		if (!get().isOnline) {
+			console.log('[SYNC] No hay conexión, abortando sincronización');
+			return;
+		}
 
 		try {
+			// Primero sincronizar los productos
+			console.log('[SYNC] Sincronizando productos primero...');
+			await useProductsStore.getState().syncPendingOperations();
+
 			console.log('[SYNC] Iniciando sincronización de ventas...');
 			const pendingOperations = await db.getPendingOperations();
-			console.log('[SYNC] Operaciones pendientes encontradas:', pendingOperations.length);
 
-			// Agrupar operaciones por venta
-			const salesOperations = new Map();
-
-			// Primero agrupar todas las operaciones por venta
-			for (const op of pendingOperations) {
-				let saleId;
-				
-				if (op.table === 'sales') {
-					saleId = op.data.id;
-				} else if (op.table === 'sale_items') {
-					saleId = op.data.sale_id;
-				} else if (op.parentId) {
-					// Para operaciones de stock, usar el parentId para encontrar la venta relacionada
-					const parentOp = pendingOperations.find(p => p.id === op.parentId);
-					if (parentOp && parentOp.table === 'sales') {
-						saleId = parentOp.data.id;
-					}
+			// Agrupar operaciones por groupId
+			const groupedOps = new Map<string, PendingOperation[]>();
+			pendingOperations.forEach(op => {
+				const group = op.groupId || op.id;
+				if (!groupedOps.has(group)) {
+					groupedOps.set(group, []);
 				}
+				groupedOps.get(group)!.push(op);
+			});
 
-				if (saleId) {
-					if (!salesOperations.has(saleId)) {
-						salesOperations.set(saleId, []);
-					}
-					salesOperations.get(saleId).push(op);
-				}
-			}
-
-			console.log('[SYNC] Ventas agrupadas:', Array.from(salesOperations.keys()));
-
-			// Procesar cada grupo de operaciones de venta
-			for (const [saleId, operations] of salesOperations) {
+			// Procesar cada grupo de operaciones
+			for (const [groupId, operations] of groupedOps) {
 				try {
-					console.log('[SYNC] Procesando operaciones para venta:', saleId);
+					console.log(`[SYNC] Procesando grupo ${groupId} con ${operations.length} operaciones`);
 
-					// Ordenar operaciones por prioridad
-					const sortedOps = operations.sort((a: PendingOperation, b: PendingOperation) => b.priority - a.priority);
+					// Verificar si hay operaciones de productos pendientes
+					const hasProductOps = operations.some(op => op.table === 'products');
+					if (hasProductOps) {
+						console.log(`[SYNC] Saltando grupo ${groupId} - contiene operaciones de productos`);
+						continue;
+					}
+
+					// Ordenar operaciones por prioridad (mayor a menor)
+					const sortedOps = operations.sort((a, b) => b.priority - a.priority);
 
 					for (const op of sortedOps) {
-						console.log('[SYNC] Procesando operación:', {
-							id: op.id,
-							type: op.type,
-							table: op.table,
-							priority: op.priority
-						});
-
 						try {
-							switch (op.table) {
-								case 'sales':
-									const { error: saleError } = await supabase
-										.from('sales')
-										.upsert(op.data);
-									if (saleError) throw saleError;
-									console.log('[SYNC] Venta actualizada:', saleId);
+							console.log(`[SYNC] Ejecutando operación:`, {
+								id: op.id,
+								type: op.type,
+								table: op.table,
+								priority: op.priority
+							});
+
+							// Verificar que el producto existe antes de crear/actualizar sale_items
+							if (op.table === 'sale_items' && op.type === 'create') {
+								const { data: product } = await supabase
+									.from('products')
+									.select('id')
+									.eq('id', op.data.product_id)
+									.single();
+
+								if (!product) {
+									console.log(`[SYNC] Producto ${op.data.product_id} no encontrado, esperando sincronización`);
+									continue;
+								}
+							}
+
+							switch (op.type) {
+								case 'delete':
+									const { error: deleteError } = await supabase
+										.from(op.table)
+										.delete()
+										.eq('id', op.data.id);
+									if (deleteError) throw deleteError;
 									break;
 
-								case 'sale_items':
-									const { error: itemError } = await supabase
-										.from('sale_items')
-										.upsert(op.data);
-									if (itemError) throw itemError;
-									console.log('[SYNC] Item actualizado:', op.data.id);
+								case 'update':
+									const { error: updateError } = await supabase
+										.from(op.table)
+										.update(op.data)
+										.eq('id', op.data.id);
+									if (updateError) throw updateError;
 									break;
 
-								case 'products':
-									if (op.type === 'stock_update') {
-										const { data: product } = await supabase
-											.from('products')
-											.select('stock')
-											.eq('id', op.data.id)
-											.single();
-
-										if (product) {
-											const { error: stockError } = await supabase
-												.from('products')
-												.update({ stock: op.data.stock })
-												.eq('id', op.data.id);
-											if (stockError) throw stockError;
-											console.log('[SYNC] Stock actualizado:', op.data.id);
-										}
-									}
+								case 'create':
+									const { error: createError } = await supabase
+										.from(op.table)
+										.insert(op.data);
+									if (createError) throw createError;
 									break;
 							}
 
 							// Marcar operación como completada
 							await db.pendingOperations.delete(op.id);
-						} catch (error) {
-							console.error('[SYNC] Error procesando operación:', error);
-							throw error;
+							console.log(`[SYNC] Operación completada:`, op.id);
+
+						} catch (error: any) {
+							console.error(`[SYNC] Error en operación ${op.id}:`, error);
+							
+							// Si el error es de clave foránea, esperar y continuar
+							if (error.code === '23503') {
+								console.log(`[SYNC] Error de clave foránea, esperando dependencias`);
+								continue;
+							}
+							
+							await db.updateOperationStatus(op.id, 'error', error.message);
+							// Continuar con la siguiente operación
 						}
 					}
-
-					console.log('[SYNC] Venta sincronizada exitosamente:', saleId);
 				} catch (error) {
-					console.error('[SYNC] Error sincronizando venta:', saleId, error);
-					// Marcar todas las operaciones de esta venta como fallidas
-					for (const op of operations) {
-						await db.updateOperationStatus(op.id, 'error', error.message);
-					}
+					console.error(`[SYNC] Error en grupo ${groupId}:`, error);
 				}
 			}
-
+			
 			// Recargar datos
 			await get().loadSales();
-			await useProductsStore.getState().loadProducts();
-
 			console.log('[SYNC] Sincronización completada exitosamente');
+
 		} catch (error) {
 			console.error('[SYNC] Error en sincronización:', error);
 			throw error;
 		}
-	}
+	},
 }));
 
-// Función para procesar y organizar los datos de ventas
 async function processSalesData(sales: SaleWithItems[], set: (state: Partial<SalesState>) => void) {
 	const now = new Date();
 	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 	const yesterday = new Date(today);
 	yesterday.setDate(yesterday.getDate() - 1);
+	
+	// Calcular inicio de semana (Lunes)
+	const weekStart = new Date(today);
+	weekStart.setDate(today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1));
+	weekStart.setHours(0, 0, 0, 0);
+	
 	const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
+  
+	// Filtrar ventas por período
 	const todaySales = sales.filter((sale) => new Date(sale.date) >= today);
 	const yesterdaySales = sales.filter((sale) => new Date(sale.date) >= yesterday && new Date(sale.date) < today);
+	const weekSales = sales.filter((sale) => new Date(sale.date) >= weekStart);
 	const monthSales = sales.filter((sale) => new Date(sale.date) >= firstDayOfMonth);
-
-	// Actualizar estado con nuevos cálculos
+  
+	// Calcular ganancias netas
+	const calculateNetProfit = (salesList: SaleWithItems[]): number => {
+	  return salesList.reduce((total, sale) => {
+		const saleProfit = sale.items.reduce((profit, item) => {
+		  const costPrice = item.product.purchase_price || 0;
+		  return profit + (item.price - costPrice) * item.quantity;
+		}, 0);
+		return total + saleProfit;
+	  }, 0);
+	};
+  
+	// Función optimizada para calcular estadísticas de productos
+	const calculateProductStats = (salesList: SaleWithItems[]): Map<string, ProductSaleStats> => {
+	  const stats = new Map<string, ProductSaleStats>();
+	  
+	  salesList.forEach(sale => {
+		sale.items.forEach(item => {
+		  const existing = stats.get(item.product.id);
+		  if (existing) {
+			existing.totalQuantity += item.quantity;
+		  } else {
+			stats.set(item.product.id, {
+			  productId: item.product.id,
+			  productName: item.product.name,
+			  totalQuantity: item.quantity
+			});
+		  }
+		});
+	  });
+	  
+	  return stats;
+	};
+  
+	// Calcular estadísticas de productos por período
+	const todayStats = calculateProductStats(todaySales);
+	const weekStats = calculateProductStats(weekSales);
+	const monthStats = calculateProductStats(monthSales);
+	const overallStats = calculateProductStats(sales);
+  
+	// Función para obtener el producto más vendido
+	const getMostSold = (stats: Map<string, ProductSaleStats>): ProductSaleStats | null => {
+	  if (stats.size === 0) return null;
+	  return Array.from(stats.values()).reduce<ProductSaleStats>((max, current) => 
+		current.totalQuantity > max.totalQuantity ? current : max
+	  , Array.from(stats.values())[0]);
+	};
+  
+	// Calcular total de stock y productos únicos
+	const products = await db.products.toArray();
+	const totalStock = products.reduce((sum, product) => sum + product.stock, 0);
+	const uniqueProducts = products.filter(p => !p.name.includes('(eliminado)')).length;
+  
 	set({
-		sales,
-		todaySales: todaySales.reduce((sum, sale) => sum + sale.total, 0),
-		yesterdaySales: yesterdaySales.reduce((sum, sale) => sum + sale.total, 0),
-		monthSales: monthSales.reduce((sum, sale) => sum + sale.total, 0),
-		totalSales: sales.reduce((sum, sale) => sum + sale.total, 0),
-		todaySalesList: todaySales,
-		yesterdaySalesList: yesterdaySales,
-		monthSalesList: monthSales,
-		allSales: sales,
+	  sales,
+	  todaySales: todaySales.reduce((sum, sale) => sum + sale.total, 0),
+	  yesterdaySales: yesterdaySales.reduce((sum, sale) => sum + sale.total, 0),
+	  weekSales: weekSales.reduce((sum, sale) => sum + sale.total, 0),
+	  monthSales: monthSales.reduce((sum, sale) => sum + sale.total, 0),
+	  totalSales: sales.reduce((sum, sale) => sum + sale.total, 0),
+	  todaySalesList: todaySales,
+	  yesterdaySalesList: yesterdaySales,
+	  weekSalesList: weekSales,
+	  monthSalesList: monthSales,
+	  allSales: sales,
+	  netProfits: {
+		today: calculateNetProfit(todaySales),
+		yesterday: calculateNetProfit(yesterdaySales),
+		week: calculateNetProfit(weekSales),
+		month: calculateNetProfit(monthSales),
+		total: calculateNetProfit(sales)
+	  },
+	  productStats: {
+		totalStock,
+		uniqueProducts,
+		mostSoldToday: getMostSold(todayStats),
+		mostSoldThisWeek: getMostSold(weekStats),
+		mostSoldThisMonth: getMostSold(monthStats),
+		mostSoldOverall: getMostSold(overallStats)
+	  }
 	});
-}
+  }
